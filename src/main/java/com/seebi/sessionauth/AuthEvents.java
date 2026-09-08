@@ -377,7 +377,7 @@ public final class AuthEvents {
         }
 
         if (!store.exists(name)) {
-            p.sendSystemMessage(Component.literal("First visit? /register <password>  ·  Returning? /login <password>").withColor(0xFFFF55));
+            prompt(p);
             return;
         }
         if (Config.AUTO_LOGIN_KNOWN_IP.get() && !store.isStrict(name) && store.knowsIp(name, ip)) {
@@ -385,7 +385,18 @@ public final class AuthEvents {
             info(p, "Recognized address — logged in automatically.");
             return;
         }
-        p.sendSystemMessage(Component.literal("First visit? /register <password>  ·  Returning? /login <password>").withColor(0xFFFF55));
+        prompt(p);
+    }
+
+    /**
+     * The single login prompt, shown centered above the hotbar (action bar)
+     * instead of chat — one line for new and returning players alike.
+     */
+    private void prompt(ServerPlayer player) {
+        player.sendOverlayMessage(Component.literal(
+                "First visit? /register <password>   ·   Returning? /login <password>")
+                .withColor(0xFFFF55));
+        lastNag.put(player.getUUID(), System.currentTimeMillis());
     }
 
     @SubscribeEvent
@@ -482,16 +493,16 @@ public final class AuthEvents {
         if (dx * dx + dy * dy + dz * dz > 0.0625) {
             p.teleportTo(lock[0], lock[1], lock[2]);
         }
-        // Frozen players standing still get no other prompts — remind them
-        // periodically what to do instead of leaving them stuck silently.
+        // Frozen players standing still get no other prompts — re-show the
+        // action bar instead of leaving them stuck silently.
         int nagEvery = Config.LOGIN_REMINDER_SECONDS.get();
         if (nagEvery > 0) {
             long now = System.currentTimeMillis();
             Long last = lastNag.get(p.getUUID());
             if (last == null || now - last > nagEvery * 1000L) {
                 lastNag.put(p.getUUID(), now);
-                p.sendSystemMessage(Component.literal(
-                        "You are not logged in: /login <password>  (new here? /register <password>)")
+                p.sendOverlayMessage(Component.literal(
+                        "First visit? /register <password>   ·   Returning? /login <password>")
                         .withColor(0xFFFF55));
             }
         }

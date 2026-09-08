@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2
+
+- Login prompt moved from chat to the action bar (centered above the hotbar):
+  one line on join, repeated while frozen. No more stacked chat messages.
+
 ## 1.1.1
 
 - Join message is now one line for everyone: first visit → `/register`,
