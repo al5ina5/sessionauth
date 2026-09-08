@@ -42,6 +42,11 @@ public final class AuthEvents {
     private final Set<UUID> authed = ConcurrentHashMap.newKeySet();
     private final Map<UUID, double[]> lockPos = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastWarn = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> lastNag = new ConcurrentHashMap<>();
+    // Brute-force protection (in-memory; a restart clears them — acceptable,
+    // the store itself is the persistent part).
+    private final Map<String, int[]> failures = new ConcurrentHashMap<>(); // key -> {count, windowStartSec}
+    private final Map<String, Long> blockedUntil = new ConcurrentHashMap<>(); // key -> epoch millis
 
     public AuthEvents(AuthStore store) {
         this.store = store;
@@ -70,6 +75,7 @@ public final class AuthEvents {
     private void markAuthed(ServerPlayer player) {
         authed.add(player.getUUID());
         lockPos.remove(player.getUUID());
+        lastNag.remove(player.getUUID());
     }
 
     private void warn(ServerPlayer player, String msg) {
@@ -82,6 +88,51 @@ public final class AuthEvents {
 
     private void info(ServerPlayer player, String msg) {
         player.sendSystemMessage(Component.literal(msg).withColor(0x55FF55));
+    }
+
+    // ---------------- brute-force protection ----------------
+
+    private static String blockKey(String name) {
+        return name.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** Epoch millis until which this name may not log in, or 0. */
+    private long blockedUntil(String name) {
+        Long until = blockedUntil.get(blockKey(name));
+        if (until == null) return 0;
+        if (until < System.currentTimeMillis()) {
+            blockedUntil.remove(blockKey(name));
+            failures.remove(blockKey(name));
+            return 0;
+        }
+        return until;
+    }
+
+    private void clearBlocks(String name) {
+        failures.remove(blockKey(name));
+        blockedUntil.remove(blockKey(name));
+    }
+
+    /**
+     * Records a wrong password. Returns attempts remaining before a block,
+     * or -1 if this attempt tripped the limit and the name is now blocked.
+     */
+    private int recordFailure(String name) {
+        int max = Config.MAX_LOGIN_ATTEMPTS.get();
+        if (max <= 0) return Integer.MAX_VALUE;
+        String k = blockKey(name);
+        long nowSec = System.currentTimeMillis() / 1000;
+        int[] slot = failures.get(k);
+        if (slot == null || nowSec - slot[1] > 300) slot = new int[]{0, (int) nowSec};
+        slot[0]++;
+        slot[1] = (int) nowSec;
+        if (slot[0] >= max) {
+            blockedUntil.put(k, System.currentTimeMillis() + Config.LOGIN_BLOCK_SECONDS.get() * 1000L);
+            failures.remove(k);
+            return -1;
+        }
+        failures.put(k, slot);
+        return max - slot[0];
     }
 
     // ---------------- commands ----------------
@@ -108,10 +159,14 @@ public final class AuthEvents {
                             return cmdLogin(p, pw);
                         })));
 
+        // NOTE: non-greedy word args here. A greedy first arg would swallow the
+        // whole input and the second arg could never parse (commands would
+        // always fail with a usage error). Passwords with spaces are supported
+        // by /register and /login, just not by /changepw.
         d.register(LiteralArgumentBuilder.<CommandSourceStack>literal("changepw")
                 .requires(src -> src.getEntity() instanceof ServerPlayer)
-                .then(Commands.argument("old", StringArgumentType.greedyString())
-                        .then(Commands.argument("new", StringArgumentType.greedyString())
+                .then(Commands.argument("old", StringArgumentType.word())
+                        .then(Commands.argument("new", StringArgumentType.word())
                                 .executes(ctx -> {
                                     ServerPlayer p = (ServerPlayer) ctx.getSource().getEntityOrException();
                                     return cmdChangePw(p,
@@ -158,10 +213,16 @@ public final class AuthEvents {
                                 return 0;
                             }
                             store.resetIps(name);
-                            var p = ctx.getSource().getServer().getPlayerList().getPlayerByName(name);
-                            if (p != null) authed.remove(p.getUUID());
+                            clearBlocks(name);
+                            // Case-insensitive: getPlayerByName casing is unreliable,
+                            // and the mimicking session may use odd caps.
+                            for (ServerPlayer p : ctx.getSource().getServer().getPlayerList().getPlayers()) {
+                                if (p.getGameProfile().name().equalsIgnoreCase(name)) {
+                                    authed.remove(p.getUUID());
+                                }
+                            }
                             ctx.getSource().sendSuccess(
-                                    () -> Component.literal("'" + name + "' will need their password on next join (all known IPs forgotten)."), true);
+                                    () -> Component.literal("'" + name + "' will need their password on next join (known IPs forgotten, blocks cleared)."), true);
                             return 1;
                         })));
 
@@ -173,6 +234,7 @@ public final class AuthEvents {
                                 ctx.getSource().sendFailure(Component.literal("No account '" + name + "'."));
                                 return 0;
                             }
+                            clearBlocks(name);
                             ctx.getSource().sendSuccess(() -> Component.literal("Account '" + name + "' deleted."), true);
                             return 1;
                         })));
@@ -191,7 +253,12 @@ public final class AuthEvents {
                         .then(Commands.argument("value", StringArgumentType.word())
                                 .executes(ctx -> {
                                     String name = StringArgumentType.getString(ctx, "player");
-                                    boolean v = Boolean.parseBoolean(StringArgumentType.getString(ctx, "value"));
+                                    String raw = StringArgumentType.getString(ctx, "value");
+                                    if (!raw.equalsIgnoreCase("true") && !raw.equalsIgnoreCase("false")) {
+                                        ctx.getSource().sendFailure(Component.literal("Value must be true or false."));
+                                        return 0;
+                                    }
+                                    boolean v = Boolean.parseBoolean(raw);
                                     if (!store.setStrict(name, v)) {
                                         ctx.getSource().sendFailure(Component.literal("No account '" + name + "'."));
                                         return 0;
@@ -200,6 +267,18 @@ public final class AuthEvents {
                                             () -> Component.literal("'" + name + "' strict mode = " + v + " (always require password)."), true);
                                     return 1;
                                 }))));
+
+        admin.then(Commands.literal("help")
+                .executes(ctx -> {
+                    var src = ctx.getSource();
+                    src.sendSuccess(() -> Component.literal("SessionAuth admin: provision, reset, unregister, ips, strict, help"), false);
+                    src.sendSuccess(() -> Component.literal("provision <player> <pw> — (re)create account, forgets known IPs"), false);
+                    src.sendSuccess(() -> Component.literal("reset <player> — forget known IPs AND clear login blocks"), false);
+                    src.sendSuccess(() -> Component.literal("unregister <player> — delete account entirely"), false);
+                    src.sendSuccess(() -> Component.literal("ips <player> — list remembered addresses"), false);
+                    src.sendSuccess(() -> Component.literal("strict <player> <true|false> — always require password"), false);
+                    return 1;
+                }));
 
         d.register(admin);
         // NOTE: keep slash-command names out of log messages — the log mask
@@ -243,9 +322,18 @@ public final class AuthEvents {
             return 0;
         }
         if (!store.verify(name, pw)) {
-            warn(p, "Wrong password.");
+            int left = recordFailure(name);
+            if (left < 0) {
+                p.connection.disconnect(Component.literal(
+                        "Too many wrong passwords. Try again in " + Config.LOGIN_BLOCK_SECONDS.get() + " seconds."));
+            } else if (left == Integer.MAX_VALUE) {
+                warn(p, "Wrong password.");
+            } else {
+                warn(p, "Wrong password. " + left + " attempt(s) left before a temporary block.");
+            }
             return 0;
         }
+        clearBlocks(name);
         store.learnIp(name, ipOf(p), Config.MAX_KNOWN_IPS.get());
         markAuthed(p);
         info(p, "Login successful — have fun!");
@@ -280,6 +368,14 @@ public final class AuthEvents {
         String ip = ipOf(p);
         lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
 
+        long blocked = blockedUntil(name);
+        if (blocked > 0) {
+            long secs = (blocked - System.currentTimeMillis() + 999) / 1000;
+            p.connection.disconnect(Component.literal(
+                    "Too many wrong passwords. Try again in " + secs + " seconds."));
+            return;
+        }
+
         if (!store.exists(name)) {
             p.sendSystemMessage(Component.literal("Welcome! Protect your name: /register <password>").withColor(0xFFFF55));
             p.sendSystemMessage(Component.literal("Pick any password, min " + Config.MIN_PASSWORD_LENGTH.get() + " characters.").withColor(0xFFFF55));
@@ -299,6 +395,7 @@ public final class AuthEvents {
             authed.remove(p.getUUID());
             lockPos.remove(p.getUUID());
             lastWarn.remove(p.getUUID());
+            lastNag.remove(p.getUUID());
         }
     }
 
@@ -345,6 +442,8 @@ public final class AuthEvents {
         return !isAuthed(p);
     }
 
+    // One small handler per interaction type (the base PlayerInteractEvent is
+    // abstract, so it can't take a subscription itself).
     @SubscribeEvent
     public void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (event.getEntity() instanceof ServerPlayer p && frozen(p)) event.setCanceled(true);
@@ -383,6 +482,19 @@ public final class AuthEvents {
         double dx = p.getX() - lock[0], dy = p.getY() - lock[1], dz = p.getZ() - lock[2];
         if (dx * dx + dy * dy + dz * dz > 0.0625) {
             p.teleportTo(lock[0], lock[1], lock[2]);
+        }
+        // Frozen players standing still get no other prompts — remind them
+        // periodically what to do instead of leaving them stuck silently.
+        int nagEvery = Config.LOGIN_REMINDER_SECONDS.get();
+        if (nagEvery > 0) {
+            long now = System.currentTimeMillis();
+            Long last = lastNag.get(p.getUUID());
+            if (last == null || now - last > nagEvery * 1000L) {
+                lastNag.put(p.getUUID(), now);
+                p.sendSystemMessage(Component.literal(
+                        "You are not logged in: /login <password>  (new here? /register <password>)")
+                        .withColor(0xFFFF55));
+            }
         }
     }
 

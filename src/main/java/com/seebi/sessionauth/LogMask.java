@@ -22,8 +22,13 @@ public final class LogMask {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static boolean installed = false;
 
-    /** Matches any line mentioning our password-taking commands. */
-    private static final String PATTERN = ".*/(register|login|changepw)\\b.*";
+    /**
+     * Matches any line that could contain a password: the player commands,
+     * plus console/RCON provisioning (which takes a password argument but
+     * has no leading slash in the command name).
+     */
+    private static final String PATTERN =
+            ".*/(register|login|changepw)\\b.*|.*authadmin\\s+provision\\b.*";
 
     public static synchronized void install() {
         if (installed) return;

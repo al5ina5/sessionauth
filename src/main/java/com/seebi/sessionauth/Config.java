@@ -24,6 +24,20 @@ public final class Config {
                     "If false, the password is required on every join (IP memory still recorded).")
             .define("autoLoginKnownIp", true);
 
+    public static final ModConfigSpec.IntValue MAX_LOGIN_ATTEMPTS = BUILDER
+            .comment("Wrong passwords allowed per player before a temporary login block.",
+                    "0 disables brute-force protection (not recommended on public servers).")
+            .defineInRange("maxLoginAttempts", 5, 0, 100);
+
+    public static final ModConfigSpec.IntValue LOGIN_BLOCK_SECONDS = BUILDER
+            .comment("How long a name is blocked from logging in after too many wrong passwords.")
+            .defineInRange("loginBlockSeconds", 600, 30, 86400);
+
+    public static final ModConfigSpec.IntValue LOGIN_REMINDER_SECONDS = BUILDER
+            .comment("Frozen players are re-told how to log in every this many seconds.",
+                    "0 disables the reminder (they only see hints when they try to act).")
+            .defineInRange("loginReminderSeconds", 20, 0, 3600);
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     private Config() {

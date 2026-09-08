@@ -44,10 +44,6 @@ public final class AuthStore {
         boolean strict = false; // true = always require password, even from known IPs
     }
 
-    public synchronized Account get(String name) {
-        return accounts.get(key(name));
-    }
-
     public synchronized boolean exists(String name) {
         return accounts.containsKey(key(name));
     }
@@ -65,12 +61,18 @@ public final class AuthStore {
         return true;
     }
 
-    /** Overwrite (provision/reset) an account, e.g. by console for a friend. */
+    /**
+     * Overwrite (provision/reset) an account, e.g. by console for a friend.
+     * Known IPs are forgotten too: whoever had the old credentials must prove
+     * the new password from their own address. Without this, provisioning over
+     * an attacker's first-registration would leave their address trusted.
+     */
     public synchronized void provision(String name, String password) {
         String k = key(name);
         Account a = accounts.computeIfAbsent(k, x -> new Account());
         a.salt = newSalt();
         a.hash = hash(a.salt, password);
+        a.ips.clear();
         save();
     }
 
@@ -139,6 +141,9 @@ public final class AuthStore {
         if (removed) save();
         return removed;
     }
+
+    // Every caller goes through the purpose-built methods above so invariants
+    // (like IP handling on provision) can't be skipped by reaching into accounts.
 
     private static String key(String name) {
         return name.toLowerCase(java.util.Locale.ROOT);

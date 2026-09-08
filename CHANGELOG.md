@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0 — review pass
+
+Fixes:
+- `/changepw` always failed (greedy first argument swallowed the second) —
+  now plain single-word arguments
+- `provision` kept old known addresses (auto-login bypass after takeover) —
+  now forgets them
+- Console `authadmin provision` passwords could reach the logs — now masked
+
+New:
+- Brute-force protection: configurable attempt limit + temporary login block
+- Periodic login reminder for frozen players (configurable, off = 0)
+- `authadmin help`, `strict` rejects non-true/false values
+- `reset` finds players regardless of name casing
+
+Internal: dead code removed. (A consolidation of the interact handlers was
+tried and reverted — the base event class is abstract and can't take
+subscriptions; boot-testing caught it.) README rewritten for players,
+internals moved to docs/TECHNICAL.md.
+
 ## 1.0.0 — first public release
 
 - `/register`, `/login`, `/changepw`, `/logout` (real text passwords, not numeric PINs)
