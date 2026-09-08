@@ -377,8 +377,7 @@ public final class AuthEvents {
         }
 
         if (!store.exists(name)) {
-            p.sendSystemMessage(Component.literal("Welcome! Protect your name: /register <password>").withColor(0xFFFF55));
-            p.sendSystemMessage(Component.literal("Pick any password, min " + Config.MIN_PASSWORD_LENGTH.get() + " characters.").withColor(0xFFFF55));
+            p.sendSystemMessage(Component.literal("First visit? /register <password>  ·  Returning? /login <password>").withColor(0xFFFF55));
             return;
         }
         if (Config.AUTO_LOGIN_KNOWN_IP.get() && !store.isStrict(name) && store.knowsIp(name, ip)) {
@@ -386,7 +385,7 @@ public final class AuthEvents {
             info(p, "Recognized address — logged in automatically.");
             return;
         }
-        p.sendSystemMessage(Component.literal("New internet address — please /login <password>.").withColor(0xFFFF55));
+        p.sendSystemMessage(Component.literal("First visit? /register <password>  ·  Returning? /login <password>").withColor(0xFFFF55));
     }
 
     @SubscribeEvent

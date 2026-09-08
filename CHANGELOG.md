@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- Join message is now one line for everyone: first visit → `/register`,
+  returning → `/login` (was two redundant lines).
+
 ## 1.1.0 — review pass
 
 Fixes:
