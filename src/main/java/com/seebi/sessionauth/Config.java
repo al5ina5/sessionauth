@@ -33,11 +33,6 @@ public final class Config {
             .comment("How long a name is blocked from logging in after too many wrong passwords.")
             .defineInRange("loginBlockSeconds", 600, 30, 86400);
 
-    public static final ModConfigSpec.IntValue LOGIN_REMINDER_SECONDS = BUILDER
-            .comment("Frozen players are re-told how to log in every this many seconds.",
-                    "0 disables the reminder (they only see hints when they try to act).")
-            .defineInRange("loginReminderSeconds", 20, 0, 3600);
-
     static final ModConfigSpec SPEC = BUILDER.build();
 
     private Config() {

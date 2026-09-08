@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+- Login prompt is now persistent: re-shown every 2 seconds while frozen
+  (vanilla action bars fade, so a single send disappears). The reminder
+  interval config is gone — the prompt simply stays until login.
+
 ## 1.1.2
 
 - Login prompt moved from chat to the action bar (centered above the hotbar):

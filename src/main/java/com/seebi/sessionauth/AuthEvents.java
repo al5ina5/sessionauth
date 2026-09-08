@@ -493,18 +493,15 @@ public final class AuthEvents {
         if (dx * dx + dy * dy + dz * dz > 0.0625) {
             p.teleportTo(lock[0], lock[1], lock[2]);
         }
-        // Frozen players standing still get no other prompts — re-show the
-        // action bar instead of leaving them stuck silently.
-        int nagEvery = Config.LOGIN_REMINDER_SECONDS.get();
-        if (nagEvery > 0) {
-            long now = System.currentTimeMillis();
-            Long last = lastNag.get(p.getUUID());
-            if (last == null || now - last > nagEvery * 1000L) {
-                lastNag.put(p.getUUID(), now);
-                p.sendOverlayMessage(Component.literal(
-                        "First visit? /register <password>   ·   Returning? /login <password>")
-                        .withColor(0xFFFF55));
-            }
+        // Action bars fade after a couple of seconds, so re-show the prompt
+        // continuously while frozen — it stays until the player logs in.
+        long now = System.currentTimeMillis();
+        Long last = lastNag.get(p.getUUID());
+        if (last == null || now - last > 2000) {
+            lastNag.put(p.getUUID(), now);
+            p.sendOverlayMessage(Component.literal(
+                    "First visit? /register <password>   ·   Returning? /login <password>")
+                    .withColor(0xFFFF55));
         }
     }
 
