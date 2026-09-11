@@ -13,7 +13,7 @@ address and logs you in by itself.
 **If your internet address changes** (new wifi, phone hotspot, moved house):
 `/login <password>` once — then you're remembered again.
 
-**Change password:** `/changepw <old> <new>`
+**Change password:** `/changepw <old> <new>` (single-word old password; new may contain spaces)
 
 **Forgot it?** Ask a server admin to reset you.
 
@@ -22,13 +22,12 @@ address and logs you in by itself.
 1. Drop the jar in the server `mods/` folder. Needs NeoForge, nothing else.
 2. Start the server once so it creates `config/sessionauth-common.toml`.
 3. That's it. Optional tweaks in the config file:
-   - `minPasswordLength` (default 6, can be lowered to 4)
+   - `minPasswordLength` (default 6, range 1–128 — can be lowered to 4, not recommended)
    - `maxKnownIps` (default 8)
    - `autoLoginKnownIp` (default true — set false to ask the password every time)
    - `maxLoginAttempts` / `loginBlockSeconds` (brute-force protection)
-   - `loginReminderSeconds` (how often frozen players are told what to do)
 
-Admin commands (ops + console): `authadmin provision | reset | unregister |
+Admin commands (server ops + console/command blocks): `authadmin provision | reset | unregister |
 ips | strict | help`. Full details in [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 Back up `sessionauth-accounts.json` (next to `server.properties`) with your world.
@@ -38,8 +37,10 @@ Back up `sessionauth-accounts.json` (next to `server.properties`) with your worl
 - Safe to have in a client pack or singleplayer world: it only acts on
   dedicated servers.
 - Family sharing one internet connection just works — every name is tracked
-  separately. (Same-house players *can* use each other's names; turn on
-  `strict` for anyone who wants a password every time.)
-- Passwords are stored hashed, never plaintext, and never reach the server logs.
+  separately. (Same-house players *can* use each other's names; per-player
+  `strict` mode via `authadmin strict <name> true` asks for a password every time.)
+- Passwords are stored hashed (PBKDF2), never plaintext, and password command
+  lines never reach the server logs. Typing your password into chat by mistake
+  (without `/`) is NOT masked — always use `/login`.
 
 MIT — see `LICENSE`. Details for the curious: [`docs/TECHNICAL.md`](docs/TECHNICAL.md).

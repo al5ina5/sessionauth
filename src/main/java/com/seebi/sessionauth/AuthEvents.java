@@ -45,8 +45,10 @@ public final class AuthEvents {
     private final Map<UUID, Long> lastNag = new ConcurrentHashMap<>();
     // Brute-force protection (in-memory; a restart clears them — acceptable,
     // the store itself is the persistent part).
-    private final Map<String, int[]> failures = new ConcurrentHashMap<>(); // key -> {count, windowStartSec}
+    private final Map<String, long[]> failures = new ConcurrentHashMap<>(); // key -> {count, windowStartSec}
     private final Map<String, Long> blockedUntil = new ConcurrentHashMap<>(); // key -> epoch millis
+    /** Wrong-attempt window: failures older than this reset the counter. */
+    private static final long FAILURE_WINDOW_SECONDS = 300;
 
     public AuthEvents(AuthStore store) {
         this.store = store;
@@ -98,6 +100,8 @@ public final class AuthEvents {
 
     /** Epoch millis until which this name may not log in, or 0. */
     private long blockedUntil(String name) {
+        if (name == null) return 0;
+        purgeExpiredBlocks();
         Long until = blockedUntil.get(blockKey(name));
         if (until == null) return 0;
         if (until < System.currentTimeMillis()) {
@@ -109,8 +113,27 @@ public final class AuthEvents {
     }
 
     private void clearBlocks(String name) {
+        if (name == null) return;
         failures.remove(blockKey(name));
         blockedUntil.remove(blockKey(name));
+    }
+
+    /** Drop expired blocks/failures so name-enumeration can't grow the maps unbounded. */
+    private void purgeExpiredBlocks() {
+        long now = System.currentTimeMillis();
+        blockedUntil.entrySet().removeIf(e -> e.getValue() == null || e.getValue() < now);
+        if (failures.size() > 1024) {
+            long nowSec = now / 1000;
+            failures.entrySet().removeIf(e ->
+                    e.getValue() == null || nowSec - e.getValue()[1] > FAILURE_WINDOW_SECONDS);
+        }
+    }
+
+    /** 600 -> "10m", 90 -> "90s", 3600 -> "1h" for player-facing kick messages. */
+    private static String formatDuration(long totalSeconds) {
+        if (totalSeconds < 90) return totalSeconds + "s";
+        if (totalSeconds < 5400) return (totalSeconds / 60) + "m";
+        return (totalSeconds / 3600) + "h";
     }
 
     /**
@@ -121,18 +144,19 @@ public final class AuthEvents {
         int max = Config.MAX_LOGIN_ATTEMPTS.get();
         if (max <= 0) return Integer.MAX_VALUE;
         String k = blockKey(name);
+        purgeExpiredBlocks();
         long nowSec = System.currentTimeMillis() / 1000;
-        int[] slot = failures.get(k);
-        if (slot == null || nowSec - slot[1] > 300) slot = new int[]{0, (int) nowSec};
+        long[] slot = failures.get(k);
+        if (slot == null || nowSec - slot[1] > FAILURE_WINDOW_SECONDS) slot = new long[]{0, nowSec};
         slot[0]++;
-        slot[1] = (int) nowSec;
+        slot[1] = nowSec;
         if (slot[0] >= max) {
             blockedUntil.put(k, System.currentTimeMillis() + Config.LOGIN_BLOCK_SECONDS.get() * 1000L);
             failures.remove(k);
             return -1;
         }
         failures.put(k, slot);
-        return max - slot[0];
+        return max - (int) slot[0];
     }
 
     // ---------------- commands ----------------
@@ -159,14 +183,14 @@ public final class AuthEvents {
                             return cmdLogin(p, pw);
                         })));
 
-        // NOTE: non-greedy word args here. A greedy first arg would swallow the
-        // whole input and the second arg could never parse (commands would
-        // always fail with a usage error). Passwords with spaces are supported
-        // by /register and /login, just not by /changepw.
+        // NOTE: first arg stays a single word (a greedy first arg would swallow
+        // the whole input and the second arg could never parse). The new
+        // password is greedy so it may contain spaces; old passwords containing
+        // spaces must be reset by an admin (provision) instead.
         d.register(LiteralArgumentBuilder.<CommandSourceStack>literal("changepw")
                 .requires(src -> src.getEntity() instanceof ServerPlayer)
                 .then(Commands.argument("old", StringArgumentType.word())
-                        .then(Commands.argument("new", StringArgumentType.word())
+                        .then(Commands.argument("new", StringArgumentType.greedyString())
                                 .executes(ctx -> {
                                     ServerPlayer p = (ServerPlayer) ctx.getSource().getEntityOrException();
                                     return cmdChangePw(p,
@@ -179,7 +203,10 @@ public final class AuthEvents {
                 .executes(ctx -> {
                     ServerPlayer p = (ServerPlayer) ctx.getSource().getEntityOrException();
                     authed.remove(p.getUUID());
+                    lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
+                    lastNag.put(p.getUUID(), System.currentTimeMillis());
                     info(p, "Logged out. Use /login to log back in.");
+                    prompt(p);
                     return 1;
                 }));
 
@@ -198,9 +225,14 @@ public final class AuthEvents {
                                         ctx.getSource().sendFailure(Component.literal("Password too short (min " + Config.MIN_PASSWORD_LENGTH.get() + ")."));
                                         return 0;
                                     }
-                                    store.provision(name, pw);
+                                    if (!store.provision(name, pw)) {
+                                        ctx.getSource().sendFailure(Component.literal("Could not save account '" + name + "'. Check server logs."));
+                                        return 0;
+                                    }
+                                    clearBlocks(name);
+                                    deauthOnline(ctx.getSource(), name);
                                     ctx.getSource().sendSuccess(
-                                            () -> Component.literal("Account '" + name + "' provisioned. Give them the password out-of-band."), true);
+                                            () -> Component.literal("Account '" + name + "' provisioned (known IPs forgotten, blocks cleared). Give them the password out-of-band."), true);
                                     return 1;
                                 }))));
 
@@ -235,7 +267,8 @@ public final class AuthEvents {
                                 return 0;
                             }
                             clearBlocks(name);
-                            ctx.getSource().sendSuccess(() -> Component.literal("Account '" + name + "' deleted."), true);
+                            deauthOnline(ctx.getSource(), name);
+                            ctx.getSource().sendSuccess(() -> Component.literal("Account '" + name + "' deleted (online session de-authed)."), true);
                             return 1;
                         })));
 
@@ -243,6 +276,10 @@ public final class AuthEvents {
                 .then(Commands.argument("player", StringArgumentType.word())
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "player");
+                            if (!store.exists(name)) {
+                                ctx.getSource().sendFailure(Component.literal("No account '" + name + "'."));
+                                return 0;
+                            }
                             ctx.getSource().sendSuccess(
                                     () -> Component.literal("Known IPs for '" + name + "': " + store.ipsOf(name)), false);
                             return 1;
@@ -253,16 +290,17 @@ public final class AuthEvents {
                         .then(Commands.argument("value", StringArgumentType.word())
                                 .executes(ctx -> {
                                     String name = StringArgumentType.getString(ctx, "player");
+                                    if (!store.exists(name)) {
+                                        ctx.getSource().sendFailure(Component.literal("No account '" + name + "'."));
+                                        return 0;
+                                    }
                                     String raw = StringArgumentType.getString(ctx, "value");
                                     if (!raw.equalsIgnoreCase("true") && !raw.equalsIgnoreCase("false")) {
                                         ctx.getSource().sendFailure(Component.literal("Value must be true or false."));
                                         return 0;
                                     }
                                     boolean v = Boolean.parseBoolean(raw);
-                                    if (!store.setStrict(name, v)) {
-                                        ctx.getSource().sendFailure(Component.literal("No account '" + name + "'."));
-                                        return 0;
-                                    }
+                                    store.setStrict(name, v);
                                     ctx.getSource().sendSuccess(
                                             () -> Component.literal("'" + name + "' strict mode = " + v + " (always require password)."), true);
                                     return 1;
@@ -294,6 +332,16 @@ public final class AuthEvents {
         return !src.isPlayer(); // console / RCON
     }
 
+    /** Drop the live session for every online player matching a name (case-insensitive). */
+    private void deauthOnline(CommandSourceStack src, String name) {
+        for (ServerPlayer p : src.getServer().getPlayerList().getPlayers()) {
+            if (p.getGameProfile().name().equalsIgnoreCase(name)) {
+                authed.remove(p.getUUID());
+                lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
+            }
+        }
+    }
+
     private int cmdRegister(ServerPlayer p, String pw) {
         String name = p.getGameProfile().name();
         if (store.exists(name)) {
@@ -304,7 +352,10 @@ public final class AuthEvents {
             warn(p, "Password too short — minimum " + Config.MIN_PASSWORD_LENGTH.get() + " characters.");
             return 0;
         }
-        store.register(name, pw, ipOf(p));
+        if (!store.register(name, pw, ipOf(p))) {
+            warn(p, "Could not save account. Ask an admin to check server logs.");
+            return 0;
+        }
         markAuthed(p);
         info(p, "Registered! From your usual internet address you will log in automatically.");
         info(p, "If your address changes, just /login <password> once.");
@@ -321,11 +372,17 @@ public final class AuthEvents {
             warn(p, "This name is not registered yet. Use /register <password>.");
             return 0;
         }
+        long blocked = blockedUntil(name);
+        if (blocked > 0) {
+            long secs = (blocked - System.currentTimeMillis() + 999) / 1000;
+            warn(p, "Too many wrong passwords. Try again in " + formatDuration(secs) + ".");
+            return 0;
+        }
         if (!store.verify(name, pw)) {
             int left = recordFailure(name);
             if (left < 0) {
                 p.connection.disconnect(Component.literal(
-                        "Too many wrong passwords. Try again in " + Config.LOGIN_BLOCK_SECONDS.get() + " seconds."));
+                        "Too many wrong passwords. Try again in " + formatDuration(Config.LOGIN_BLOCK_SECONDS.get()) + "."));
             } else if (left == Integer.MAX_VALUE) {
                 warn(p, "Wrong password.");
             } else {
@@ -337,25 +394,45 @@ public final class AuthEvents {
         store.learnIp(name, ipOf(p), Config.MAX_KNOWN_IPS.get());
         markAuthed(p);
         info(p, "Login successful — have fun!");
+        if (pw.length() < Config.MIN_PASSWORD_LENGTH.get()) {
+            warn(p, "Your password is shorter than the current minimum ("
+                    + Config.MIN_PASSWORD_LENGTH.get() + "). Change it with /changepw <old> <new>.");
+        }
         return 1;
     }
 
     private int cmdChangePw(ServerPlayer p, String oldPw, String newPw) {
         String name = p.getGameProfile().name();
         if (!isAuthed(p)) {
-            warn(p, "Log in first.");
+            warn(p, "Log in first: /login <password>");
+            return 0;
+        }
+        long blocked = blockedUntil(name);
+        if (blocked > 0) {
+            long secs = (blocked - System.currentTimeMillis() + 999) / 1000;
+            warn(p, "Too many wrong passwords. Try again in " + formatDuration(secs) + ".");
             return 0;
         }
         if (!store.verify(name, oldPw)) {
-            warn(p, "Current password is wrong.");
+            int left = recordFailure(name);
+            if (left < 0) {
+                p.connection.disconnect(Component.literal(
+                        "Too many wrong passwords. Try again in " + formatDuration(Config.LOGIN_BLOCK_SECONDS.get()) + "."));
+            } else {
+                warn(p, "Current password is wrong.");
+            }
             return 0;
         }
         if (newPw.length() < Config.MIN_PASSWORD_LENGTH.get()) {
             warn(p, "New password too short — minimum " + Config.MIN_PASSWORD_LENGTH.get() + " characters.");
             return 0;
         }
-        store.setPassword(name, newPw);
-        info(p, "Password changed.");
+        clearBlocks(name);
+        if (!store.setPassword(name, newPw)) {
+            warn(p, "Could not save new password. Ask an admin to check server logs.");
+            return 0;
+        }
+        info(p, "Password changed. Known addresses were forgotten — you'll confirm it once on next join.");
         return 1;
     }
 
@@ -366,21 +443,26 @@ public final class AuthEvents {
         if (!(event.getEntity() instanceof ServerPlayer p)) return;
         String name = p.getGameProfile().name();
         String ip = ipOf(p);
-        lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
+        // Never inherit a stale session: a previous crash/kick may have skipped logout cleanup.
+        authed.remove(p.getUUID());
 
         long blocked = blockedUntil(name);
         if (blocked > 0) {
             long secs = (blocked - System.currentTimeMillis() + 999) / 1000;
+            lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
             p.connection.disconnect(Component.literal(
-                    "Too many wrong passwords. Try again in " + secs + " seconds."));
+                    "Too many wrong passwords. Try again in " + formatDuration(secs) + "."));
+            lockPos.remove(p.getUUID());
+            lastNag.remove(p.getUUID());
             return;
         }
+        lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
 
         if (!store.exists(name)) {
             prompt(p);
             return;
         }
-        if (Config.AUTO_LOGIN_KNOWN_IP.get() && !store.isStrict(name) && store.knowsIp(name, ip)) {
+        if (!ip.isEmpty() && Config.AUTO_LOGIN_KNOWN_IP.get() && !store.isStrict(name) && store.knowsIp(name, ip)) {
             markAuthed(p);
             info(p, "Recognized address — logged in automatically.");
             return;
@@ -489,6 +571,11 @@ public final class AuthEvents {
             lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
             return;
         }
+        // Kill momentum (flight/elytra/fall) so rubber-banding can't be used to scout or fight the lock.
+        try {
+            p.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+        } catch (Exception ignored) {
+        }
         double dx = p.getX() - lock[0], dy = p.getY() - lock[1], dz = p.getZ() - lock[2];
         if (dx * dx + dy * dy + dz * dz > 0.0625) {
             p.teleportTo(lock[0], lock[1], lock[2]);
@@ -528,5 +615,25 @@ public final class AuthEvents {
     @SubscribeEvent
     public void onToss(ItemTossEvent event) {
         if (event.getPlayer() instanceof ServerPlayer p && frozen(p)) event.setCanceled(true);
+    }
+
+    @SubscribeEvent
+    public void onBreakSpeed(PlayerEvent.BreakSpeed event) {
+        if (event.getEntity() instanceof ServerPlayer p && frozen(p)) event.setNewSpeed(0f);
+    }
+
+    @SubscribeEvent
+    public void onHarvestCheck(PlayerEvent.HarvestCheck event) {
+        if (event.getEntity() instanceof ServerPlayer p && frozen(p)) event.setCanHarvest(false);
+    }
+
+    @SubscribeEvent
+    public void onContainerOpen(net.neoforged.neoforge.event.entity.player.PlayerContainerEvent.Open event) {
+        if (event.getEntity() instanceof ServerPlayer p && frozen(p)) {
+            try {
+                p.closeContainer();
+            } catch (Exception ignored) {
+            }
+        }
     }
 }

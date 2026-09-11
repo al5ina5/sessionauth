@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.1 — reviewer round 2
+
+Fixes from a 5-way audit:
+- Admin `provision`/`unregister` now de-auth live sessions and clear login
+  blocks (was: player stayed authed); blocked-join no longer leaks lock state.
+- Fresh joins never inherit stale sessions (cleared at login start).
+- `/changepw` now counts toward brute-force protection like `/login`.
+- Store: KDF moved out of the global lock, saves report failure, corrupt
+  accounts files are quarantined (not overwritten), atomic-move fallback,
+  null/malformed-record hardening, unknown algorithms fail closed,
+  `/changepw` also forgets known IPs.
+- Freeze: block-break and container-open cancelled, momentum zeroed each tick.
+- Mask: any `namespace:` prefix covered (`sessionauth:login` leaked before).
+- UX: `/changepw` new password may contain spaces, `ips`/`strict` handle
+  unknown accounts first, block times render as `10m`/`1h`, weak-password
+  nudge after login, `/logout` re-freezes immediately.
+
 ## 1.2.0
 
 - Default `minPasswordLength` 4 → 6 (range still 1–128, so owners who want

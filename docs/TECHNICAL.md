@@ -18,19 +18,23 @@ SessionAuth adds a password + known-address memory on top:
   address (and not `strict`, and `autoLoginKnownIp` on) → auto-login.
   Otherwise → `/login`, and the address is learned on success.
 - Unauthenticated players are frozen: no chat, no non-auth commands, no
-  block/item/entity interaction, position locked (teleport-back), immune to
-  and incapable of damage, no pickup/drop. Plus a periodic reminder message.
-- Brute force: configurable wrong-attempt limit per name, then a temporary
-  login block (kick on join while blocked). In-memory only; a restart clears
+  block break/place, item/entity interaction, container opening, position
+  locked (teleport-back, momentum zeroed), immune to and incapable of damage,
+  no pickup/drop. Plus a persistent action-bar reminder while frozen.
+- Brute force: configurable wrong-attempt limit per name (5-minute sliding
+  window), then a temporary login block (kick on join, warn on repeated
+  `/login`/`/changepw` while blocked). In-memory only; a restart clears
   blocks, the store is the persistent part.
-- `provision` (and any password overwrite) forgets known addresses, so taking
-  over an account can't inherit its trust.
+- `provision` and `/changepw` (any password overwrite) forget known addresses,
+  and admin `provision`/`reset`/`unregister` de-auth live sessions and clear
+  login blocks, so taking over an account can't inherit its trust or session.
 
 ## Log masking
 
 A global Log4j filter drops any line containing `/register|/login|/changepw`
-(with any casing, with or without a `minecraft:` namespace prefix)
-or `authadmin provision` (covers typed passwords and syntax-error echoes).
+(with any casing, with or without any `namespace:` prefix such as `minecraft:`
+or `sessionauth:`) or `authadmin provision` (covers typed passwords and
+syntax-error echoes).
 Everything else logs normally — unlike the `logAdminCommands` gamerule.
 Fail-closed by design: our own log messages avoid those tokens.
 
@@ -47,7 +51,7 @@ Fail-closed by design: our own log messages avoid those tokens.
   (210k iterations) slows this by ~5 orders of magnitude vs single-round
   SHA-256, but short passwords still fall — the default minimum is 6 and
   existing weak passwords should be reset.
-- No permission nodes yet — admin commands check op level / console.
+- No permission nodes yet — admin commands check op level / console / command blocks.
 
 ## Building
 
