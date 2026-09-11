@@ -23,12 +23,13 @@ public final class LogMask {
     private static boolean installed = false;
 
     /**
-     * Matches any line that could contain a password: the player commands,
+     * Matches any line that could contain a password: the player commands
+     * (any casing, with or without a {@code minecraft:} namespace prefix),
      * plus console/RCON provisioning (which takes a password argument but
      * has no leading slash in the command name).
      */
     private static final String PATTERN =
-            ".*/(register|login|changepw)\\b.*|.*authadmin\\s+provision\\b.*";
+            "(?i).*/(minecraft:)?(register|login|changepw)\\b.*|.*authadmin\\s+provision\\b.*";
 
     public static synchronized void install() {
         if (installed) return;

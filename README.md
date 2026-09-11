@@ -22,7 +22,7 @@ address and logs you in by itself.
 1. Drop the jar in the server `mods/` folder. Needs NeoForge, nothing else.
 2. Start the server once so it creates `config/sessionauth-common.toml`.
 3. That's it. Optional tweaks in the config file:
-   - `minPasswordLength` (default 4)
+   - `minPasswordLength` (default 6, can be lowered to 4)
    - `maxKnownIps` (default 8)
    - `autoLoginKnownIp` (default true — set false to ask the password every time)
    - `maxLoginAttempts` / `loginBlockSeconds` (brute-force protection)

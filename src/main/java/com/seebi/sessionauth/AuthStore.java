@@ -18,6 +18,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 
 /**
  * Password + known-IP store, persisted as JSON in the server game directory.
@@ -28,6 +30,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class AuthStore {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    /** PBKDF2-HMAC-SHA256 cost for new passwords (OWASP 210k, JDK built-in, still dependency-free). */
+    static final int PBKDF2_ITERATIONS = 210_000;
+    private static final int PBKDF2_KEY_BITS = 256;
+    private static final String ALGO_PBKDF2 = "pbkdf2-210k";
 
     private final Path file;
     private final Map<String, Account> accounts = new ConcurrentHashMap<>();
@@ -40,6 +47,9 @@ public final class AuthStore {
     public static final class Account {
         String salt = "";
         String hash = "";
+        // "" (or missing) = legacy single-round SHA-256, "pbkdf2-210k" = PBKDF2-HMAC-SHA256.
+        // Old records without this field keep verifying and auto-upgrade on next successful login.
+        String algo = "";
         final List<String> ips = new ArrayList<>();
         boolean strict = false; // true = always require password, even from known IPs
     }
@@ -54,7 +64,8 @@ public final class AuthStore {
         if (accounts.containsKey(k)) return false;
         Account a = new Account();
         a.salt = newSalt();
-        a.hash = hash(a.salt, password);
+        a.hash = hashPbkdf2(a.salt, password);
+        a.algo = ALGO_PBKDF2;
         if (ip != null && !ip.isEmpty()) a.ips.add(ip);
         accounts.put(k, a);
         save();
@@ -71,7 +82,8 @@ public final class AuthStore {
         String k = key(name);
         Account a = accounts.computeIfAbsent(k, x -> new Account());
         a.salt = newSalt();
-        a.hash = hash(a.salt, password);
+        a.hash = hashPbkdf2(a.salt, password);
+        a.algo = ALGO_PBKDF2;
         a.ips.clear();
         save();
     }
@@ -79,17 +91,34 @@ public final class AuthStore {
     public synchronized boolean verify(String name, String password) {
         Account a = accounts.get(key(name));
         if (a == null) return false;
-        String attempt = hash(a.salt, password);
-        return MessageDigest.isEqual(
-                attempt.getBytes(StandardCharsets.UTF_8),
-                a.hash.getBytes(StandardCharsets.UTF_8));
+        boolean ok;
+        if (isPbkdf2(a)) {
+            String attempt = hashPbkdf2(a.salt, password);
+            ok = MessageDigest.isEqual(
+                    attempt.getBytes(StandardCharsets.UTF_8),
+                    a.hash.getBytes(StandardCharsets.UTF_8));
+        } else {
+            String attempt = hashLegacy(a.salt, password);
+            ok = MessageDigest.isEqual(
+                    attempt.getBytes(StandardCharsets.UTF_8),
+                    a.hash.getBytes(StandardCharsets.UTF_8));
+            if (ok) {
+                // Transparent upgrade: legacy passwords re-hashed with PBKDF2 on next good login.
+                a.salt = newSalt();
+                a.hash = hashPbkdf2(a.salt, password);
+                a.algo = ALGO_PBKDF2;
+                save();
+            }
+        }
+        return ok;
     }
 
     public synchronized boolean setPassword(String name, String password) {
         Account a = accounts.get(key(name));
         if (a == null) return false;
         a.salt = newSalt();
-        a.hash = hash(a.salt, password);
+        a.hash = hashPbkdf2(a.salt, password);
+        a.algo = ALGO_PBKDF2;
         save();
         return true;
     }
@@ -155,7 +184,29 @@ public final class AuthStore {
         return HexFormat.of().formatHex(salt);
     }
 
-    static String hash(String salt, String password) {
+    private static boolean isPbkdf2(Account a) {
+        return ALGO_PBKDF2.equals(a.algo);
+    }
+
+    static String hashPbkdf2(String saltHex, String password) {
+        try {
+            byte[] salt = HexFormat.of().parseHex(saltHex);
+            PBEKeySpec spec = new PBEKeySpec(
+                    password.toCharArray(), salt, PBKDF2_ITERATIONS, PBKDF2_KEY_BITS);
+            try {
+                byte[] out = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                        .generateSecret(spec).getEncoded();
+                return HexFormat.of().formatHex(out);
+            } finally {
+                spec.clearPassword();
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("PBKDF2 unavailable", e);
+        }
+    }
+
+    /** Legacy single-round SHA-256, kept only to verify + migrate pre-1.2.0 accounts. */
+    static String hashLegacy(String salt, String password) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] out = md.digest((salt + "\u0000" + password).getBytes(StandardCharsets.UTF_8));
@@ -163,6 +214,10 @@ public final class AuthStore {
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
+    }
+
+    static String hash(String salt, String password) {
+        return hashLegacy(salt, password);
     }
 
     private void load() {

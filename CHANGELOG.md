@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+- Default `minPasswordLength` 4 → 6 (range still 1–128, so owners who want
+  4-char PINs can lower it back — not recommended, 4-digit PINs fall to
+  offline brute force in under a second against the old hash).
+- Password storage: PBKDF2-HMAC-SHA256 (210,000 iterations, JDK built-in,
+  still dependency-free). Pre-1.2.0 SHA-256 records verify and auto-upgrade
+  on next successful login.
+- Log masking: case-insensitive, covers `minecraft:`-namespaced commands
+  (`/minecraft:login <pw>` leaked before).
+
 ## 1.1.3
 
 - Login prompt is now persistent: re-shown every 2 seconds while frozen

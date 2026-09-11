@@ -10,7 +10,9 @@ SessionAuth adds a password + known-address memory on top:
 
 - Accounts keyed by lowercase name in `sessionauth-accounts.json`
   (atomic write via temp file + rename), next to `server.properties`.
-- Passwords: per-user 16-byte salt, SHA-256(salt + NUL + password), hex.
+- Passwords: per-user 16-byte salt, PBKDF2-HMAC-SHA256 (210,000 iterations,
+  256-bit key), hex. Pre-1.2.0 single-round SHA-256 records still verify and
+  auto-upgrade to PBKDF2 on next successful login.
   Compared with `MessageDigest.isEqual` (constant-time).
 - On login: unknown name → must `/register`. Known name + remembered
   address (and not `strict`, and `autoLoginKnownIp` on) → auto-login.
@@ -27,6 +29,7 @@ SessionAuth adds a password + known-address memory on top:
 ## Log masking
 
 A global Log4j filter drops any line containing `/register|/login|/changepw`
+(with any casing, with or without a `minecraft:` namespace prefix)
 or `authadmin provision` (covers typed passwords and syntax-error echoes).
 Everything else logs normally — unlike the `logAdminCommands` gamerule.
 Fail-closed by design: our own log messages avoid those tokens.
@@ -40,9 +43,10 @@ Fail-closed by design: our own log messages avoid those tokens.
   (the target use case) are unaffected — offline UUIDs derive from names.
 - Same-address impersonation (households, shared VPN exits) is trusted by
   design; `strict` mode covers anyone who wants out of that.
-- Weak passwords can be brute-forced offline from the accounts file by
-  whoever can read it. PBKDF2/bcrypt is on the roadmap; SHA-256 keeps v1
-  dependency-free.
+- Whoever can read the accounts file can attempt offline guessing; PBKDF2
+  (210k iterations) slows this by ~5 orders of magnitude vs single-round
+  SHA-256, but short passwords still fall — the default minimum is 6 and
+  existing weak passwords should be reset.
 - No permission nodes yet — admin commands check op level / console.
 
 ## Building
@@ -57,5 +61,5 @@ Jar lands in `build/libs/`. Pinned to NeoForge 26.1.2.106 / MC 26.1.2.
 
 ## Roadmap ideas
 
-PBKDF2 hashing, permission nodes, UUID-keyed accounts with migration,
+Permission nodes, UUID-keyed accounts with migration,
 configurable freeze granularity, kick-after-timeout for idle unauthed players.

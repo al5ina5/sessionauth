@@ -11,8 +11,10 @@ public final class Config {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
     public static final ModConfigSpec.IntValue MIN_PASSWORD_LENGTH = BUILDER
-            .comment("Minimum password length for /register, /changepw and provisioned accounts.")
-            .defineInRange("minPasswordLength", 4, 1, 128);
+            .comment("Minimum password length for /register, /changepw and provisioned accounts.",
+                    "Default 6. Lower to 4 if you need short PIN-style passwords (not recommended,",
+                    "4-digit PINs fall to offline brute force in under a second).")
+            .defineInRange("minPasswordLength", 6, 1, 128);
 
     public static final ModConfigSpec.IntValue MAX_KNOWN_IPS = BUILDER
             .comment("How many recent internet addresses are remembered per player for auto-login.",
