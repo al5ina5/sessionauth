@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3 (staged — not yet deployed, awaiting green flag)
+
+- Block durations render as `1h30m` instead of `90m`; `/changepw` reports
+  attempts-left like `/login`.
+
 ## 1.2.2 — reviewer round 2, part 2
 
 Follow-ups from re-auditing 1.2.1:

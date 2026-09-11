@@ -133,8 +133,10 @@ public final class AuthEvents {
     /** 600 -> "10m", 90 -> "90s", 3600 -> "1h" for player-facing kick messages. */
     private static String formatDuration(long totalSeconds) {
         if (totalSeconds < 90) return totalSeconds + "s";
-        if (totalSeconds < 5400) return (totalSeconds / 60) + "m";
-        return (totalSeconds / 3600) + "h";
+        if (totalSeconds < 3600) return (totalSeconds / 60) + "m";
+        long hours = totalSeconds / 3600;
+        long remMin = (totalSeconds % 3600) / 60;
+        return remMin == 0 ? hours + "h" : hours + "h" + remMin + "m";
     }
 
     /**
@@ -417,8 +419,10 @@ public final class AuthEvents {
                 lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
                 p.connection.disconnect(Component.literal(
                         "Too many wrong passwords. Try again in " + formatDuration(Config.LOGIN_BLOCK_SECONDS.get()) + "."));
-            } else {
+            } else if (left == Integer.MAX_VALUE) {
                 warn(p, "Current password is wrong.");
+            } else {
+                warn(p, "Current password is wrong. " + left + " attempt(s) left before a temporary block.");
             }
             return 0;
         }
