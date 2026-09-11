@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2 — reviewer round 2, part 2
+
+Follow-ups from re-auditing 1.2.1:
+- Store: `provision` KDF out of the global lock, legacy-upgrade race closed,
+  `setStrict`/`resetIps`/`unregister` report save failures, atomic-move
+  fallback on any IO error, malformed-salt handling fail-closed, empty names
+  rejected.
+- Session: `reset` shares the de-auth helper (locks + re-prompts), `changepw`
+  lockout cleans session state, break-speed fully cancelled, momentum killed
+  before first-tick anchor, `fallDistance` reset, admin targets re-prompted.
+- Mask: `(?is)` so multi-line echoes can't split token off password; docs now
+  state the slash-less-chat scope limit honestly.
+
 ## 1.2.1 — reviewer round 2
 
 Fixes from a 5-way audit:
@@ -11,7 +24,8 @@ Fixes from a 5-way audit:
   accounts files are quarantined (not overwritten), atomic-move fallback,
   null/malformed-record hardening, unknown algorithms fail closed,
   `/changepw` also forgets known IPs.
-- Freeze: block-break and container-open cancelled, momentum zeroed each tick.
+- Freeze: break-speed cancelled + harvest denied, containers closed on open,
+  momentum zeroed each tick.
 - Mask: any `namespace:` prefix covered (`sessionauth:login` leaked before).
 - UX: `/changepw` new password may contain spaces, `ips`/`strict` handle
   unknown accounts first, block times render as `10m`/`1h`, weak-password

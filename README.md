@@ -39,8 +39,8 @@ Back up `sessionauth-accounts.json` (next to `server.properties`) with your worl
 - Family sharing one internet connection just works — every name is tracked
   separately. (Same-house players *can* use each other's names; per-player
   `strict` mode via `authadmin strict <name> true` asks for a password every time.)
-- Passwords are stored hashed (PBKDF2), never plaintext, and password command
-  lines never reach the server logs. Typing your password into chat by mistake
-  (without `/`) is NOT masked — always use `/login`.
+- Passwords are stored hashed (PBKDF2), never plaintext, and single-line
+  slash-form password command lines never reach the server logs. Typing your
+  password into chat by mistake (without `/`) is NOT masked — always use `/login`.
 
 MIT — see `LICENSE`. Details for the curious: [`docs/TECHNICAL.md`](docs/TECHNICAL.md).

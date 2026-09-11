@@ -37,6 +37,8 @@ or `sessionauth:`) or `authadmin provision` (covers typed passwords and
 syntax-error echoes).
 Everything else logs normally — unlike the `logAdminCommands` gamerule.
 Fail-closed by design: our own log messages avoid those tokens.
+Known gaps (won't fix without censoring normal chat): passwords typed into
+chat without `/`, and slash-less RCON/console/command-block input echoes.
 
 ## Limitations (honest)
 

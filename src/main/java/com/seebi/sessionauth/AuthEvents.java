@@ -78,6 +78,7 @@ public final class AuthEvents {
         authed.add(player.getUUID());
         lockPos.remove(player.getUUID());
         lastNag.remove(player.getUUID());
+        lastWarn.remove(player.getUUID());
     }
 
     private void warn(ServerPlayer player, String msg) {
@@ -204,6 +205,7 @@ public final class AuthEvents {
                     ServerPlayer p = (ServerPlayer) ctx.getSource().getEntityOrException();
                     authed.remove(p.getUUID());
                     lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
+                    lastWarn.remove(p.getUUID());
                     lastNag.put(p.getUUID(), System.currentTimeMillis());
                     info(p, "Logged out. Use /login to log back in.");
                     prompt(p);
@@ -246,13 +248,7 @@ public final class AuthEvents {
                             }
                             store.resetIps(name);
                             clearBlocks(name);
-                            // Case-insensitive: getPlayerByName casing is unreliable,
-                            // and the mimicking session may use odd caps.
-                            for (ServerPlayer p : ctx.getSource().getServer().getPlayerList().getPlayers()) {
-                                if (p.getGameProfile().name().equalsIgnoreCase(name)) {
-                                    authed.remove(p.getUUID());
-                                }
-                            }
+                            deauthOnline(ctx.getSource(), name);
                             ctx.getSource().sendSuccess(
                                     () -> Component.literal("'" + name + "' will need their password on next join (known IPs forgotten, blocks cleared)."), true);
                             return 1;
@@ -338,6 +334,7 @@ public final class AuthEvents {
             if (p.getGameProfile().name().equalsIgnoreCase(name)) {
                 authed.remove(p.getUUID());
                 lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
+                prompt(p);
             }
         }
     }
@@ -416,6 +413,8 @@ public final class AuthEvents {
         if (!store.verify(name, oldPw)) {
             int left = recordFailure(name);
             if (left < 0) {
+                authed.remove(p.getUUID());
+                lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
                 p.connection.disconnect(Component.literal(
                         "Too many wrong passwords. Try again in " + formatDuration(Config.LOGIN_BLOCK_SECONDS.get()) + "."));
             } else {
@@ -566,15 +565,16 @@ public final class AuthEvents {
         if (!(event.getEntity() instanceof ServerPlayer p)) return;
         if (!frozen(p)) return;
         if (p.level().isClientSide()) return;
+        // Kill momentum (flight/elytra/fall) so rubber-banding can't be used to scout or fight the lock.
+        try {
+            p.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+            p.fallDistance = 0f;
+        } catch (Exception ignored) {
+        }
         double[] lock = lockPos.get(p.getUUID());
         if (lock == null) {
             lockPos.put(p.getUUID(), new double[]{p.getX(), p.getY(), p.getZ()});
             return;
-        }
-        // Kill momentum (flight/elytra/fall) so rubber-banding can't be used to scout or fight the lock.
-        try {
-            p.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
-        } catch (Exception ignored) {
         }
         double dx = p.getX() - lock[0], dy = p.getY() - lock[1], dz = p.getZ() - lock[2];
         if (dx * dx + dy * dy + dz * dz > 0.0625) {
@@ -619,7 +619,10 @@ public final class AuthEvents {
 
     @SubscribeEvent
     public void onBreakSpeed(PlayerEvent.BreakSpeed event) {
-        if (event.getEntity() instanceof ServerPlayer p && frozen(p)) event.setNewSpeed(0f);
+        if (event.getEntity() instanceof ServerPlayer p && frozen(p)) {
+            event.setCanceled(true);
+            event.setNewSpeed(0f);
+        }
     }
 
     @SubscribeEvent

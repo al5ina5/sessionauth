@@ -65,13 +65,14 @@ public final class AuthStore {
     public boolean register(String name, String password, String ip) {
         if (name == null || password == null) return false;
         String k = key(name);
+        if (k.isEmpty()) return false;
         if (accounts.containsKey(k)) return false;
         // Costly KDF runs outside any lock so login bursts can't serialize the server.
         String salt = newSalt();
         String hash;
         try {
             hash = hashPbkdf2(salt, password);
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             return false;
         }
         synchronized (this) {
@@ -93,18 +94,20 @@ public final class AuthStore {
      * an attacker's first-registration would leave their address trusted.
      * Returns false if the save failed.
      */
-    public synchronized boolean provision(String name, String password) {
+    public boolean provision(String name, String password) {
         if (name == null || password == null) return false;
+        String k = key(name);
+        if (k.isEmpty()) return false;
         String salt = newSalt();
         String hash;
         try {
             hash = hashPbkdf2(salt, password);
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             return false;
         }
         synchronized (this) {
-            String k = key(name);
             Account a = accounts.computeIfAbsent(k, x -> new Account());
+            if (a.ips == null) a.ips = new ArrayList<>();
             a.salt = salt;
             a.hash = hash;
             a.algo = ALGO_PBKDF2;
@@ -139,7 +142,7 @@ public final class AuthStore {
                 LOGGER.warn("[SessionAuth] Unknown password algorithm for '{}', denying login.", key(name));
                 return false;
             }
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             // Malformed salt/parameters: treat as failed login, never throw into the login path.
             return false;
         }
@@ -149,12 +152,15 @@ public final class AuthStore {
             String hash;
             try {
                 hash = hashPbkdf2(salt, password);
-            } catch (IllegalArgumentException e) {
+            } catch (RuntimeException e) {
                 return true; // auth succeeded; upgrade can retry next login
             }
             synchronized (this) {
                 Account a = accounts.get(key(name));
-                if (a != null) {
+                // Only upgrade if nobody changed the record meanwhile (still legacy + same hash).
+                if (a != null && (a.algo == null || a.algo.isEmpty())
+                        && snapshot.hash != null && snapshot.hash.equals(a.hash)
+                        && snapshot.salt != null && snapshot.salt.equals(a.salt)) {
                     a.salt = salt;
                     a.hash = hash;
                     a.algo = ALGO_PBKDF2;
@@ -175,12 +181,13 @@ public final class AuthStore {
         String hash;
         try {
             hash = hashPbkdf2(salt, password);
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             return false;
         }
         synchronized (this) {
             Account a = accounts.get(key(name));
             if (a == null) return false;
+            if (a.ips == null) a.ips = new ArrayList<>();
             a.salt = salt;
             a.hash = hash;
             a.algo = ALGO_PBKDF2;
@@ -224,8 +231,7 @@ public final class AuthStore {
         Account a = accounts.get(key(name));
         if (a == null) return false;
         a.strict = strict;
-        save();
-        return true;
+        return save();
     }
 
     /** Forget all IPs: next join from anywhere requires the password. */
@@ -234,15 +240,15 @@ public final class AuthStore {
         Account a = accounts.get(key(name));
         if (a == null) return false;
         if (a.ips != null) a.ips.clear();
-        save();
-        return true;
+        return save();
     }
 
     public synchronized boolean unregister(String name) {
         if (name == null) return false;
         boolean removed = accounts.remove(key(name)) != null;
-        if (removed) save();
-        return removed;
+        if (!removed) return false;
+        // Memory stays removed (fail closed) even if the disk write fails; caller reports persistence.
+        return save();
     }
 
     // Every caller goes through the purpose-built methods above so invariants
@@ -376,6 +382,13 @@ public final class AuthStore {
                         java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException amnse) {
                 Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException atomicFailed) {
+                // Cross-FS moves can fail atomic after tmp was written; retry non-atomically.
+                if (Files.exists(tmp)) {
+                    Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    throw atomicFailed;
+                }
             }
             return true;
         } catch (IOException e) {

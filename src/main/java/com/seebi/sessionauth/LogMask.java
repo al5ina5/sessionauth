@@ -28,9 +28,15 @@ public final class LogMask {
      * {@code minecraft:} or {@code sessionauth:}),
      * plus console/RCON provisioning (which takes a password argument but
      * has no leading slash in the command name).
+     * <p>
+     * {@code (?is)}: case-insensitive, and {@code .} spans line breaks so
+     * multi-line echoes can't split the token off the password. Slash-less
+     * chat (typing the password without {@code /}) is intentionally out of
+     * scope — matching bare words would censor normal chat containing
+     * "login"/"register".
      */
     private static final String PATTERN =
-            "(?i).*/([a-z0-9_.-]+:)?(register|login|changepw)\\b.*|.*authadmin\\s+provision\\b.*";
+            "(?is).*/([a-z0-9_.-]+:)?(register|login|changepw)\\b.*|.*authadmin\\s+provision\\b.*";
 
     public static synchronized void install() {
         if (installed) return;
